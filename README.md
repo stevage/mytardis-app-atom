@@ -13,18 +13,29 @@ Symlink this app into a MyTardis `tardis/apps` directory. The preferred name for
 Configuration
 -------------
 
-Celery is used to schedule periodic file ingestion. Import from Picasa is supported to provide a 
-quick example, but in most deployments you'll want to write your own Atom producer.
+Celery is used to schedule periodic file ingestion. Install as follows:
+
+    pip install django-celery
+
+Import from Picasa is supported to provide a 
+quick example, but in most deployments you'll want to either use [Tim Dettrick's Atom Dataset Producer][producer]
+or write your own Atom producer.
 
 The `atom_ingest.walk_feeds` task takes a variable number of feeds and updates them. Here's an example 
-for `settings.py` that checks two Picassa feeds every 30 seconds:
+for `settings.py` that checks two Picasa feeds every 30 seconds:
 
+    import djcelery
+    djcelery.setup_loader()
+    from datetime import timedelta
+
+    ....
+    
     CELERYBEAT_SCHEDULE = {
       "update-feeds": {
         "task": "atom_ingest.walk_feeds",
         "schedule": timedelta(seconds=30),
         "args": ('http://picasaweb.google.com/data/feed/base/all?prettyprint=true&tag=wombat&kind=photo',
-                 'http://picasaweb.google.com/data/feed/base/all?prettyprint=true&tag=numbat&kind=photo )
+                 'http://picasaweb.google.com/data/feed/base/all?prettyprint=true&tag=numbat&kind=photo')
       },
     }
 
@@ -44,3 +55,4 @@ In a production environment, you should combine HTTP Basic password protection w
 
 [celerybeat]: http://ask.github.com/celery/userguide/periodic-tasks.html#starting-celerybeat
 [celeryd]: http://ask.github.com/celery/userguide/workers.html#starting-the-worker
+[producer]: https://github.com/tjdett/atom-dataset-provider
