@@ -8,6 +8,9 @@ from tardis.tardis_portal.models import Dataset, DatasetParameter,\
 from django.conf import settings
 import urllib2
 
+import logging
+from celery.contrib import rdb
+
 class AtomImportSchemas:
 
     BASE_NAMESPACE = 'http://mytardis.org/schemas/atom-import'
@@ -48,7 +51,7 @@ class AtomPersister:
         '''
         :param feed: Feed context for entry
         :param entry: Entry to check
-        returns a boolean
+        returns a boolean: Does a dataset for this entry already exist?
         '''
         try:
             self._get_dataset(feed, entry)
@@ -58,9 +61,13 @@ class AtomPersister:
 
 
     def _get_dataset(self, feed, entry):
+        '''
+        :returns the dataset corresponding to this entry, if any.
+        '''
         try:
             param_name = ParameterName.objects.get(name=self.PARAM_ENTRY_ID,
                                                    schema=AtomImportSchemas.get_schema())
+            # error if two datasetparameters have same details. - freak occurrence?
             parameter = DatasetParameter.objects.get(name=param_name,
                                                      string_value=entry.id)
         except DatasetParameter.DoesNotExist:
@@ -69,6 +76,9 @@ class AtomPersister:
 
 
     def _create_entry_parameter_set(self, dataset, entryId, updated):
+        '''
+        Attaches schema to dataset, containing populated 'EntryID' and 'Updated' fields
+        ''' 
         namespace = AtomImportSchemas.get_schema(Schema.DATASET).namespace
         mgr = ParameterSetManager(parentObject=dataset, schema=namespace)
         mgr.new_param(self.PARAM_ENTRY_ID, entryId)
@@ -76,12 +86,20 @@ class AtomPersister:
 
 
     def _create_experiment_id_parameter_set(self, experiment, experimentId):
+        '''
+        Adds ExperimentID field to dataset schema
+        '''
         namespace = AtomImportSchemas.get_schema(Schema.EXPERIMENT).namespace
         mgr = ParameterSetManager(parentObject=experiment, schema=namespace)
         mgr.new_param(self.PARAM_EXPERIMENT_ID, experimentId)
 
 
     def _get_user_from_entry(self, entry):
+        '''
+        Finds the user corresponding to this entry, by matching email
+        first, and username if that fails. Creates a new user if still
+        no joy.
+        '''
         try:
             if entry.author_detail.email != None:
                 return User.objects.get(email=entry.author_detail.email)
@@ -97,6 +115,9 @@ class AtomPersister:
 
 
     def process_enclosure(self, dataset, enclosure):
+        '''
+        Retrieves the contents of the linked datafile.
+        '''
         filename = getattr(enclosure, 'title', basename(enclosure.href))
         datafile = dataset.dataset_file_set.create(url=enclosure.href, \
                                                    filename=filename)
@@ -124,11 +145,20 @@ class AtomPersister:
 
 
     def make_local_copy(self, datafile):
+        ''' Actually retrieve datafile. '''
         from .tasks import make_local_copy
         make_local_copy.delay(datafile)
 
 
     def _get_experiment_details(self, entry, user):
+        ''' 
+        Looks for clues in the entry to help identify what Experiment the dataset should
+        be stored under. Looks for tags like "...ExperimentID", "...ExperimentTitle".
+        Failing that, makes up an experiment ID/title.
+        :param entry Dataset entry to match.
+        :param user Previously identified User
+        returns (experimentId, title) 
+        '''
         try:
             # Google Picasa attributes
             if entry.has_key('gphoto_albumid'):
@@ -150,6 +180,11 @@ class AtomPersister:
 
 
     def _get_experiment(self, entry, user):
+        '''
+        Finds the Experiment corresponding to this entry.
+        If it doesn't exist, a new Experiment is created and given
+        an appropriate ACL for the user.
+        '''
         experimentId, title = self._get_experiment_details(entry, user)
         try:
             try:
@@ -178,7 +213,13 @@ class AtomPersister:
 
 
     def process(self, feed, entry):
+        '''
+        Processes one entry from the feed, retrieving data, and 
+        saving it to an appropriate Experiment if it's new.
+        :returns Saved dataset
+        '''
         user = self._get_user_from_entry(entry)
+        logging.getLogger(__name__).warning("ingest.procecss: {0}".format(user))
         # Create dataset if necessary
         try:
             dataset = self._get_dataset(feed, entry)
@@ -230,13 +271,20 @@ class AtomWalker:
 
 
     def ingest(self):
+        '''
+        Processes each of the entries in our feed.
+        '''
+        import pydevd
+        logging.getLogger(__name__).warning ("let's ingest!")
+        pydevd.settrace()
         for feed, entry in self.get_entries():
+            logging.getLogger(__name__).warning ("ingesting {0}".format(feed))
             self.persister.process(feed, entry)
 
 
     def get_entries(self):
         '''
-        returns list of (feed, entry) tuples
+        returns list of (feed, entry) tuples to be processed, filtering out old ones.
         '''
         doc = self.fetch_feed(self.root_doc)
         entries = []
@@ -254,5 +302,6 @@ class AtomWalker:
 
 
     def fetch_feed(self, url):
+        '''Retrieves the current contents of our feed.'''
         return feedparser.parse(url, handlers=[self.get_credential_handler()])
 
