@@ -41,11 +41,30 @@ class AtomImportSchemas:
 
 class AtomPersister:
 
+    # Names of parameters, must match fixture entries.
+    # Some are also used for <category> processing in the feed itself.
     PARAM_ENTRY_ID = 'EntryID'
     PARAM_EXPERIMENT_ID = 'ExperimentID'
     PARAM_UPDATED = 'Updated'
     PARAM_EXPERIMENT_TITLE = 'ExperimentTitle'
-
+    
+    ALLOW_EXPERIMENT_CREATION = True         # Should we create new experiments
+    ALLOW_EXPERIMENT_TITLE_MATCHING = True   # If there's no id, is the title enough to match on
+    ALLOW_UNIDENTIFIED_EXPERIMENT = True   # If there's no title/id, should we process it as "uncategorized"?
+    DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE="Uncategorized Data"
+    ALLOW_UNNAMED_DATASETS = True            # If a dataset has no title, should we ingest it with a default name
+    DEFAULT_UNNAMED_DATASET_TITLE = '(assorted files)'
+    ALLOW_USER_CREATION = True               # If experiments belong to unknown users, create them?
+    # Can existing datasets be updated? If not, we ignore updates. To cause a new dataset to be created, the incoming
+    # feed must have a unique EntryID for the dataset (eg, hash of its contents).
+    ALLOW_UPDATING_DATASETS = True
+    # If a datafile is modified, do we re-harvest it (creating two copies)? Else, we ignore the update. False is not recommended.
+    ALLOW_UPDATING_DATAFILES = True                     
+    
+    # If files are served as /user/instrument/experiment/dataset/datafile/moredatafiles
+    # then 'datafile' is at depth 5. This is so we can maintain directory structure that
+    # is significant within a dataset. Set to -1 to assume the last directory
+    DATAFILE_DIRECTORY_DEPTH = 9 # eep
 
     def is_new(self, feed, entry):
         '''
@@ -55,13 +74,16 @@ class AtomPersister:
         '''
         try:
             self._get_dataset(feed, entry)
-            return False
+            # If datasets can be updated, we need to check every file.
+            return self.ALLOW_UPDATING_DATASETS
         except Dataset.DoesNotExist:
             return True
 
 
     def _get_dataset(self, feed, entry):
         '''
+        If we have previously imported this entry as a dataset, return that dataset. Datasets
+        are identified with the attached "EntryID" parameter.
         :returns the dataset corresponding to this entry, if any.
         '''
         try:
@@ -79,11 +101,18 @@ class AtomPersister:
         '''
         Attaches schema to dataset, containing populated 'EntryID' and 'Updated' fields
         ''' 
-        namespace = AtomImportSchemas.get_schema(Schema.DATASET).namespace
-        mgr = ParameterSetManager(parentObject=dataset, schema=namespace)
-        mgr.new_param(self.PARAM_ENTRY_ID, entryId)
-        mgr.new_param(self.PARAM_UPDATED, iso8601.parse_date(updated))
-
+        schema = AtomImportSchemas.get_schema(Schema.DATASET)
+        # I'm not sure why mgr.set_param always creates additional parametersets.. --SB.
+        try:
+            p = DatasetParameter.objects.get(parameterset__dataset=dataset, parameterset__schema=schema,
+                                        name__name=self.PARAM_ENTRY_ID)
+            p.updated = updated;
+            p.save()
+        except DatasetParameter.DoesNotExist:
+            
+            mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
+            mgr.new_param(self.PARAM_ENTRY_ID, entryId)
+            mgr.new_param(self.PARAM_UPDATED, iso8601.parse_date(updated))
 
     def _create_experiment_id_parameter_set(self, experiment, experimentId):
         '''
@@ -97,7 +126,7 @@ class AtomPersister:
     def _get_user_from_entry(self, entry):
         '''
         Finds the user corresponding to this entry, by matching email
-        first, and username if that fails. Creates a new user if still
+        first, and username if that fails. May create a new user if still
         no joy.
         '''
         try:
@@ -108,7 +137,11 @@ class AtomPersister:
         try:
             return User.objects.get(username=entry.author_detail.name)
         except User.DoesNotExist:
-            pass
+            if not self.ALLOW_USER_CREATION:
+                logging.getLogger(__name__).info("Skipping dataset. ALLOW_USER_CREATION disabled. Datasets found for user '{0}' ({1}) but user doesn't exist".format(
+                        entry.author_detail.name, getattr(entry.author_detail, "email", "no email")))
+                return None
+        
         user = User(username=entry.author_detail.name)
         user.save()
         return user
@@ -116,11 +149,50 @@ class AtomPersister:
 
     def process_enclosure(self, dataset, enclosure):
         '''
-        Retrieves the contents of the linked datafile.
+        Transfers one datafile from within a dataset, saving it locally.
         '''
+        #if self.DATAFILE_DIRECTORY_DEPTH < 1:
+        #    filename = getattr(enclosure, 'title', basename(enclosure.href))
+        #else:
+        #    #filename = "/".join(enclosure.href.split("/")[self.DATAFILE_DIRECTORY_DEPTH:])
+        #    filename = "/".join(enclosure.path.split("/")[self.DATAFILE_DIRECTORY_DEPTH:])
+        
         filename = getattr(enclosure, 'title', basename(enclosure.href))
+        
+        datafiles = dataset.dataset_file_set.filter(filename=filename)
+        import datetime 
+        def fromunix1000 (tstr):
+            return datetime.datetime.utcfromtimestamp(float(tstr)/1000)
+        if datafiles.count() > 0:
+            datafile = datafiles[0]
+            if not datafile.modification_time:
+                return # We have this file, it has no time/date, let's skip it.
+            
+            def total_seconds(td): # exists on datetime.timedelta in Python 2.7
+                return (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
+            timediff = total_seconds(fromunix1000(enclosure.modified) - datafile.modification_time)
+
+            if timediff == 0:
+                return # We have this file already, same time/date.
+            elif timediff < 0:
+                logging.getLogger(__name__).warn("Skipping dataset. File to ingest '{0}' is {1} seconds *older* than stored file. Are the system clocks correct?".
+                                                format(enclosure.href, timediff))
+                return
+            else:
+                if not self.ALLOW_UPDATING_DATAFILES:
+                    logging.getLogger(__name__).warn("Skipping dataset. ALLOW_UPDATING_DATAFILES is disabled, and '{0}' is {1} seconds newer than stored file.".
+                                                format(enclosure.href, timediff))
+                    return
+#                logging.getLogger(__name__).warn("Skipping dataset. File to ingest '{0}' is {1} seconds newer than stored file. We don't support updating datafiles.".
+#                                                 format(enclosure.href, timediff))
+                logging.getLogger(__name__).info("Ingesting updated dataset. File to ingest '{0}' is {1} seconds newer than stored file. This will create an additional copy.".
+                                                 format(enclosure.href, timediff))
+            
+        # Create a record and start transferring.
         datafile = dataset.dataset_file_set.create(url=enclosure.href, \
-                                                   filename=filename)
+                                                   filename=filename,
+                                                   created_time=fromunix1000(enclosure.created),
+                                                   modification_time=fromunix1000(enclosure.modified))
         try:
             datafile.mimetype = enclosure.mime
         except AttributeError:
@@ -172,12 +244,28 @@ class AtomPersister:
                     experimentId = tag.term
                 if tag.scheme.endswith(self.PARAM_EXPERIMENT_TITLE):
                     title = tag.term
+            
+            if title == "":
+                title = None
+            if experimentId == "":
+                experimentId = None
+            # If a title is enough to match on, proceed...
+            if (self.ALLOW_EXPERIMENT_TITLE_MATCHING):
+                if (experimentId != None or title != None):
+                    return (experimentId, title)
+            # Otherwise require both Id and title
             if (experimentId != None and title != None):
                 return (experimentId, title)
+            
         except AttributeError:
             pass
-        return (user.username+"-default", "Uncategorized Data")
+        if (self.ALLOW_UNIDENTIFIED_EXPERIMENT):
+            return (user.username+"-default", self.DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE)
 
+        else:
+            logging.getLogger(__name__).info("Skipping dataset. ALLOW_UNIDENTIFIED_EXPERIMENT disabled, so not harvesting unidentified experiment for user {0}.".format(
+                        user.username))
+            return (None, None)
 
     def _get_experiment(self, entry, user):
         '''
@@ -186,30 +274,49 @@ class AtomPersister:
         an appropriate ACL for the user.
         '''
         experimentId, title = self._get_experiment_details(entry, user)
-        try:
+        if (experimentId, title) == (None, None):
+            return None
+        
+        if experimentId:
             try:
+                # Try and match ExperimentID if we have one.
                 param_name = ParameterName.objects.\
                     get(name=self.PARAM_EXPERIMENT_ID, \
                         schema=AtomImportSchemas.get_schema(Schema.EXPERIMENT))
                 parameter = ExperimentParameter.objects.\
                     get(name=param_name, string_value=experimentId)
+                return parameter.parameterset.experiment
             except ExperimentParameter.DoesNotExist:
-                raise Experiment.DoesNotExist
-            return parameter.parameterset.experiment
-        except Experiment.DoesNotExist:
-            experiment = Experiment(title=title, created_by=user)
-            experiment.save()
-            self._create_experiment_id_parameter_set(experiment, experimentId)
-            acl = ExperimentACL(experiment=experiment,
-                    pluginId=django_user,
-                    entityId=user.id,
-                    canRead=True,
-                    canWrite=True,
-                    canDelete=True,
-                    isOwner=True,
-                    aclOwnershipType=ExperimentACL.OWNER_OWNED)
-            acl.save()
-            return experiment
+                pass
+        
+        # Failing that, match ExperimentTitle if possible
+        if title:
+            try:
+                experiment = Experiment.objects.get(title=title, created_by=user)
+                return experiment
+            except Experiment.DoesNotExist:
+                pass
+
+        # No existing expriment - shall we create a new one?
+        if not self.ALLOW_EXPERIMENT_CREATION:
+            logging.getLogger(__name__).info("Skipping dataset. ALLOW_EXPERIMENT_CREATION disabled, so ignoring (experimentId: {0}, title: {1}, user: {2})".format(
+                    experimentId, title, user))
+            return None
+        experiment = Experiment(title=title, created_by=user)
+        experiment.save()
+        self._create_experiment_id_parameter_set(experiment, experimentId)
+        logging.getLogger(__name__).info("Created experiment {0} (title: {1}, user: {2}, experimentId: {3})".format(
+                        experiment.id, experiment.title, experiment.created_by, experimentId)) 
+        acl = ExperimentACL(experiment=experiment,
+                pluginId=django_user,
+                entityId=user.id,
+                canRead=True,
+                canWrite=True,
+                canDelete=True,
+                isOwner=True,
+                aclOwnershipType=ExperimentACL.OWNER_OWNED)
+        acl.save()
+        return experiment
 
 
     def process(self, feed, entry):
@@ -219,25 +326,44 @@ class AtomPersister:
         :returns Saved dataset
         '''
         user = self._get_user_from_entry(entry)
-        logging.getLogger(__name__).warning("ingest.procecss: {0}".format(user))
+        if not user:
+            return None # No target user means no ingest.
+        dataset_description=entry.title
+        if not dataset_description:
+            if not self.ALLOW_UNNAMED_DATASETS:
+                logging.getLogger(__name__).info("Skipping dataset. ALLOW_UNNAMED_DATASETS disabled, so ignoring unnamed dataset ({0}) for user {1}".format(entry.id, user))
+                return
+            dataset_description=self.DEFAULT_UNNAMED_DATASET_TITLE
+        
         # Create dataset if necessary
         try:
             dataset = self._get_dataset(feed, entry)
+            # no exception? dataset found, so do we want to try and update it?
+            if not self.ALLOW_UPDATING_DATASETS:
+                logging.getLogger(__name__).debug("Skipping dataset. ALLOW_UPDATING_DATASETS disabled, so ignore existing dataset {0}".format(dataset.id))
+                return dataset
+
         except Dataset.DoesNotExist:
             experiment = self._get_experiment(entry, user)
-            dataset = experiment.dataset_set.create(description=entry.title)
+            if not experiment: # Experiment not found and can't be created.
+                return None
+            dataset = experiment.dataset_set.create(description=dataset_description)
+            logging.getLogger(__name__).info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
+                    experiment.id, experiment.title))
             dataset.save()
-            self._create_entry_parameter_set(dataset, entry.id, entry.updated)
-            for enclosure in getattr(entry, 'enclosures', []):
-                self.process_enclosure(dataset, enclosure)
-            for media_content in getattr(entry, 'media_content', []):
-                self.process_media_content(dataset, media_content)
+            
+        # may update existing dataset.
+        self._create_entry_parameter_set(dataset, entry.id, entry.updated)
+        for enclosure in getattr(entry, 'enclosures', []):
+            self.process_enclosure(dataset, enclosure)
+        for media_content in getattr(entry, 'media_content', []):
+            self.process_media_content(dataset, media_content)
         return dataset
 
 
 
 class AtomWalker:
-
+    '''Logic for retrieving an Atom feed and iterating over it - but nothing about to do with the entries.'''
 
     def __init__(self, root_doc, persister = AtomPersister()):
         self.root_doc = root_doc
@@ -270,18 +396,6 @@ class AtomWalker:
             return None
 
 
-    def ingest(self):
-        '''
-        Processes each of the entries in our feed.
-        '''
-        import pydevd
-        logging.getLogger(__name__).warning ("let's ingest!")
-        pydevd.settrace()
-        for feed, entry in self.get_entries():
-            logging.getLogger(__name__).warning ("ingesting {0}".format(feed))
-            self.persister.process(feed, entry)
-
-
     def get_entries(self):
         '''
         returns list of (feed, entry) tuples to be processed, filtering out old ones.
@@ -298,7 +412,17 @@ class AtomWalker:
             if len(new_entries) != len(doc.entries) or next_href == None:
                 break
             doc = self.fetch_feed(next_href)
+        logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), len(doc.entries)))
         return reversed(entries)
+
+    def ingest(self):
+        '''
+        Processes each of the entries in our feed.
+        '''
+        import pydevd
+        #pydevd.settrace()
+        for feed, entry in self.get_entries():
+            self.persister.process(feed, entry)
 
 
     def fetch_feed(self, url):
