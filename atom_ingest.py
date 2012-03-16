@@ -7,7 +7,7 @@ from tardis.tardis_portal.models import Dataset, DatasetParameter,\
     Experiment, ExperimentACL, ExperimentParameter, ParameterName, Schema, User
 from django.conf import settings
 import urllib2
-
+import datetime
 import logging
 from celery.contrib import rdb
 
@@ -73,13 +73,44 @@ class AtomPersister:
         returns a boolean: Does a dataset for this entry already exist?
         '''
         try:
-            self._get_dataset(feed, entry)
-            # If datasets can be updated, we need to check every file.
+            dataset = self._get_dataset(feed, entry)
+            # If datasets can be updated, we need to check if the dataset as a whole is recent, then examine datafiles later on.
+            if not self.ALLOW_UPDATING_DATASETS:
+                return False
+            else:
+                ds_updated=self._get_dataset_updated(dataset)
+                if ds_updated:
+                    entry_updated = iso8601.parse_date(entry.updated)
+                    if entry_updated == ds_updated:
+                        return False # Saved dataset same as incoming
+                    elif entry_updated < ds_updated:
+                        td = ds_updated - entry_updated
+                        logging.getLogger(__name__).warn("Skipping dataset. Entry to ingest '{0}' is {1} *older* than dataset 'updated' record. Are the system clocks correct?".
+                                                format(entry.id, self.human_time(td.days*86400 + td.seconds)))
+                        return False
+                    else:
+                        return True
+                else:
+                    return True # Saved dataset has no date - need to consider updating.
             return self.ALLOW_UPDATING_DATASETS
         except Dataset.DoesNotExist:
             return True
 
+    def _get_dataset_updated(self, dataset):
+        
+        from tardis.tardis_portal.util import get_local_time, get_utc_time
+        try:
+            p = DatasetParameter.objects.get(
+                    parameterset__dataset=dataset, 
+                    parameterset__schema=AtomImportSchemas.get_schema(), 
+                    name__name=self.PARAM_UPDATED)
 
+            # Database times are naive-local, so we make them aware-local
+            local = get_local_time(p.datetime_value)
+            return local
+        except DatasetParameter.DoesNotExist:
+            return None
+        
     def _get_dataset(self, feed, entry):
         '''
         If we have previously imported this entry as a dataset, return that dataset. Datasets
@@ -99,19 +130,32 @@ class AtomPersister:
 
     def _create_entry_parameter_set(self, dataset, entryId, updated):
         '''
-        Attaches schema to dataset, containing populated 'EntryID' and 'Updated' fields
+        Creates or updates schema for dataset with populated 'EntryID' and 'Updated' fields
         ''' 
         schema = AtomImportSchemas.get_schema(Schema.DATASET)
-        # I'm not sure why mgr.set_param always creates additional parametersets.. --SB.
+        # I'm not sure why mgr.set_param always creates additional parametersets. Anyway
+        # we can't use it. --SB.
         try:
             p = DatasetParameter.objects.get(parameterset__dataset=dataset, parameterset__schema=schema,
                                         name__name=self.PARAM_ENTRY_ID)
-            p.updated = updated;
-            p.save()
         except DatasetParameter.DoesNotExist:
             
             mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
             mgr.new_param(self.PARAM_ENTRY_ID, entryId)
+            
+        try:
+            p = DatasetParameter.objects.get(parameterset__dataset=dataset, parameterset__schema=schema,
+                                        name__name=self.PARAM_UPDATED)
+
+            from tardis.tardis_portal.util import get_local_time, get_utc_time
+            i=iso8601.parse_date(updated)
+            l=get_local_time(i)
+            u=get_utc_time(l) 
+            p.datetime_value = l
+            #p.updated = updated;
+            p.save()
+        except DatasetParameter.DoesNotExist:            
+            mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
             mgr.new_param(self.PARAM_UPDATED, iso8601.parse_date(updated))
 
     def _create_experiment_id_parameter_set(self, experiment, experimentId):
@@ -146,48 +190,63 @@ class AtomPersister:
         user.save()
         return user
 
+    def human_time(self, seconds):
+        mins, secs = divmod(seconds, 60)
+        hours, mins = divmod(mins, 60)
+        days, hours = divmod(hours, 24)
+        if days > 0:
+            return "%d days, %d hours" % (days, hours)
+        elif hours > 0:
+            return "%d hours, %d minutes" % (hours, mins)
+        else:
+            return '%d minutes, %d seconds' % (mins, secs)
 
     def process_enclosure(self, dataset, enclosure):
         '''
-        Transfers one datafile from within a dataset, saving it locally.
+        Examines one "enclosure" from an entry, representing a datafile.
+        Determines whether to process it, and if so, starts the transfer.
         '''
-        #if self.DATAFILE_DIRECTORY_DEPTH < 1:
-        #    filename = getattr(enclosure, 'title', basename(enclosure.href))
-        #else:
-        #    #filename = "/".join(enclosure.href.split("/")[self.DATAFILE_DIRECTORY_DEPTH:])
-        #    filename = "/".join(enclosure.path.split("/")[self.DATAFILE_DIRECTORY_DEPTH:])
         
         filename = getattr(enclosure, 'title', basename(enclosure.href))
+        # check if we were provided a full path, and hence a subdirectory for the file 
+        if (self.DATAFILE_DIRECTORY_DEPTH >= 1 and
+                    getattr(enclosure, "path", "") != "" and
+                    enclosure.path.split("/")[self.DATAFILE_DIRECTORY_DEPTH:] != ""):
+            filename = "/".join(enclosure.path.split("/")[self.DATAFILE_DIRECTORY_DEPTH:])
+        
+        #filename = getattr(enclosure, 'title', basename(enclosure.href))
         
         datafiles = dataset.dataset_file_set.filter(filename=filename)
-        import datetime 
         def fromunix1000 (tstr):
             return datetime.datetime.utcfromtimestamp(float(tstr)/1000)
         if datafiles.count() > 0:
             datafile = datafiles[0]
-            if not datafile.modification_time:
+            from django.db.models import Max                     
+            newest=datafiles.aggregate(Max('modification_time'))['modification_time__max']
+            if not newest:# datafile.modification_time:
+                ### rethink this!
                 return # We have this file, it has no time/date, let's skip it.
             
             def total_seconds(td): # exists on datetime.timedelta in Python 2.7
                 return (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
-            timediff = total_seconds(fromunix1000(enclosure.modified) - datafile.modification_time)
+            timediff = total_seconds(fromunix1000(enclosure.modified) - newest)
 
             if timediff == 0:
                 return # We have this file already, same time/date.
             elif timediff < 0:
-                logging.getLogger(__name__).warn("Skipping dataset. File to ingest '{0}' is {1} seconds *older* than stored file. Are the system clocks correct?".
-                                                format(enclosure.href, timediff))
+                logging.getLogger(__name__).warn("Skipping datafile. File to ingest '{0}' is {1} *older* than stored file. Are the system clocks correct?".
+                                                format(enclosure.href, self.human_time(-timediff)))
                 return
             else:
                 if not self.ALLOW_UPDATING_DATAFILES:
-                    logging.getLogger(__name__).warn("Skipping dataset. ALLOW_UPDATING_DATAFILES is disabled, and '{0}' is {1} seconds newer than stored file.".
-                                                format(enclosure.href, timediff))
+                    logging.getLogger(__name__).warn("Skipping datafile. ALLOW_UPDATING_DATAFILES is disabled, and '{0}' is {1}newer than stored file.".
+                                                format(enclosure.href, self.human_time(timediff)))
                     return
-#                logging.getLogger(__name__).warn("Skipping dataset. File to ingest '{0}' is {1} seconds newer than stored file. We don't support updating datafiles.".
-#                                                 format(enclosure.href, timediff))
-                logging.getLogger(__name__).info("Ingesting updated dataset. File to ingest '{0}' is {1} seconds newer than stored file. This will create an additional copy.".
-                                                 format(enclosure.href, timediff))
-            
+                logging.getLogger(__name__).info("Ingesting updated datafile. File to ingest '{0}' is {1} newer than stored file. This will create an additional copy.".
+                                                 format(enclosure.href, self.human_time(timediff)))
+        else: # no local copy already.
+            logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
+                
         # Create a record and start transferring.
         datafile = dataset.dataset_file_set.create(url=enclosure.href, \
                                                    filename=filename,
@@ -325,6 +384,7 @@ class AtomPersister:
         saving it to an appropriate Experiment if it's new.
         :returns Saved dataset
         '''
+        import pydevd; pydevd.settrace()
         user = self._get_user_from_entry(entry)
         if not user:
             return None # No target user means no ingest.
@@ -352,7 +412,7 @@ class AtomPersister:
                     experiment.id, experiment.title))
             dataset.save()
             
-        # may update existing dataset.
+        # Set 'Updated' parameter for dataset, and collect the files.
         self._create_entry_parameter_set(dataset, entry.id, entry.updated)
         for enclosure in getattr(entry, 'enclosures', []):
             self.process_enclosure(dataset, enclosure)
@@ -386,6 +446,7 @@ class AtomWalker:
 
     @staticmethod
     def _get_next_href(doc):
+        #return None #####
         try:
             links = filter(lambda x: x.rel == 'next', doc.feed.links)
             if len(links) < 1:
@@ -402,9 +463,11 @@ class AtomWalker:
         '''
         doc = self.fetch_feed(self.root_doc)
         entries = []
+        totalentries = 0
         while True:
             if doc == None:
                 break
+            totalentries += len(doc.entries)
             new_entries = filter(lambda entry: self.persister.is_new(doc.feed, entry), doc.entries)
             entries.extend(map(lambda entry: (doc.feed, entry), new_entries))
             next_href = self._get_next_href(doc)
@@ -412,15 +475,13 @@ class AtomWalker:
             if len(new_entries) != len(doc.entries) or next_href == None:
                 break
             doc = self.fetch_feed(next_href)
-        logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), len(doc.entries)))
+        logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), totalentries))
         return reversed(entries)
 
-    def ingest(self):
+    def ingest(self): 
         '''
         Processes each of the entries in our feed.
         '''
-        import pydevd
-        #pydevd.settrace()
         for feed, entry in self.get_entries():
             self.persister.process(feed, entry)
 
