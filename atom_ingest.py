@@ -99,6 +99,7 @@ class AtomPersister:
     def _get_dataset_updated(self, dataset):
         
         from tardis.tardis_portal.util import get_local_time, get_utc_time
+        import logging
         try:
             p = DatasetParameter.objects.get(
                     parameterset__dataset=dataset, 
@@ -106,6 +107,9 @@ class AtomPersister:
                     name__name=self.PARAM_UPDATED)
 
             # Database times are naive-local, so we make them aware-local
+            if p.datetime_value == None:
+                logging.getLogger(__name__).warn("Weird. Dataset {0} has an UPDATED parameter with no datetime_value.".format(dataset))
+                return None
             local = get_local_time(p.datetime_value)
             return local
         except DatasetParameter.DoesNotExist:
@@ -384,7 +388,7 @@ class AtomPersister:
         saving it to an appropriate Experiment if it's new.
         :returns Saved dataset
         '''
-        import pydevd; pydevd.settrace()
+        #import pydevd; pydevd.settrace()
         user = self._get_user_from_entry(entry)
         if not user:
             return None # No target user means no ingest.
