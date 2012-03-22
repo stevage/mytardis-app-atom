@@ -261,6 +261,9 @@ class AtomPersister:
                     return
                 logging.getLogger(__name__).info("Ingesting updated datafile. File to ingest '{0}' is {1} newer than stored file. This will create an additional copy.".
                                                  format(enclosure.href, self.human_time(timediff)))
+                # Hide existing versions of file. (Probably need to refine...)
+                from tardis.microtardis.models import Datafile_Hidden
+                Datafile_Hidden.objects.filter(datafile__filename=filename).update(hidden=True)
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
 
