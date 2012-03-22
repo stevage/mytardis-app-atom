@@ -419,7 +419,13 @@ class AtomPersister:
         # Set 'Updated' parameter for dataset, and collect the files.
         self._create_entry_parameter_set(dataset, entry.id, entry.updated)
         for enclosure in getattr(entry, 'enclosures', []):
-            self.process_enclosure(dataset, enclosure)
+            try:
+                self.process_enclosure(dataset, enclosure)
+            except:
+                import json
+                logging.getLogger(__name__).exception("Exception processing enclosure for {1} in dataset {0}:".format(
+                        dataset, getattr(enclosure, 'href', "<no href!>")))
+                logging.getLogger(__name__).error("Enclosure: {0}".format(json.dumps(enclosure)))
         for media_content in getattr(entry, 'media_content', []):
             self.process_media_content(dataset, media_content)
         return dataset
