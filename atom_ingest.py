@@ -10,8 +10,21 @@ import urllib2
 import datetime
 import logging
 from celery.contrib import rdb
+from tardis.tardis_portal.models import Dataset_File
+from django.utils.importlib import import_module
 
 class AtomImportSchemas:
+    modules = settings.FILTER_MIDDLEWARE
+    for filter_module, filter_class in modules:
+        try:
+            # import filter middleware
+            filter_middleware = import_module(filter_module)
+            filter_init = getattr(filter_middleware, filter_class)
+            # initialise filter
+            filter_init()
+        except ImportError, e:
+            logging.getLogger(__name__).error('Error importing filter %s: "%s"' % (module, e) )
+
 
     BASE_NAMESPACE = 'http://mytardis.org/schemas/atom-import'
 
@@ -48,13 +61,13 @@ class AtomPersister:
     PARAM_UPDATED = 'Updated'
     PARAM_EXPERIMENT_TITLE = 'ExperimentTitle'
     
-    ALLOW_EXPERIMENT_CREATION = True         # Should we create new experiments
+    ALLOW_EXPERIMENT_CREATION = True        # Should we create new experiments
     ALLOW_EXPERIMENT_TITLE_MATCHING = True   # If there's no id, is the title enough to match on
-    ALLOW_UNIDENTIFIED_EXPERIMENT = True   # If there's no title/id, should we process it as "uncategorized"?
+    ALLOW_UNIDENTIFIED_EXPERIMENT = True     # If there's no title/id, should we process it as "uncategorized"?
     DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE="Uncategorized Data"
     ALLOW_UNNAMED_DATASETS = True            # If a dataset has no title, should we ingest it with a default name
     DEFAULT_UNNAMED_DATASET_TITLE = '(assorted files)'
-    ALLOW_USER_CREATION = True               # If experiments belong to unknown users, create them?
+    ALLOW_USER_CREATION = False               # If experiments belong to unknown users, create them?
     # Can existing datasets be updated? If not, we ignore updates. To cause a new dataset to be created, the incoming
     # feed must have a unique EntryID for the dataset (eg, hash of its contents).
     ALLOW_UPDATING_DATASETS = True
@@ -64,7 +77,7 @@ class AtomPersister:
     # If files are served as /user/instrument/experiment/dataset/datafile/moredatafiles
     # then 'datafile' is at depth 5. This is so we can maintain directory structure that
     # is significant within a dataset. Set to -1 to assume the last directory
-    DATAFILE_DIRECTORY_DEPTH = 9 # eep
+    DATAFILE_DIRECTORY_DEPTH = 7 # /mnt/rmmf_staging/e123/NovaNanoSEM/exp2/ds2/test4.tif
 
     def is_new(self, feed, entry):
         '''
@@ -250,12 +263,15 @@ class AtomPersister:
                                                  format(enclosure.href, self.human_time(timediff)))
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
-                
+
+
         # Create a record and start transferring.
-        datafile = dataset.dataset_file_set.create(url=enclosure.href, \
-                                                   filename=filename,
-                                                   created_time=fromunix1000(enclosure.created),
-                                                   modification_time=fromunix1000(enclosure.modified))
+        datafile = Dataset_File(dataset=dataset,
+                                url=enclosure.href, 
+                                filename=filename,
+                                created_time=fromunix1000(enclosure.created),
+                                modification_time=fromunix1000(enclosure.modified))
+        
         try:
             datafile.mimetype = enclosure.mime
         except AttributeError:
@@ -269,8 +285,11 @@ class AtomPersister:
             filename = basename(media_content['url'])
         except AttributeError:
             return
-        datafile = dataset.dataset_file_set.create(url=media_content['url'], \
-                                                   filename=filename)
+
+        datafile = Dataset_File(dataset=dataset,
+                                url=media_content['url'], 
+                                filename=filename)
+
         try:
             datafile.mimetype = media_content['type']
         except IndexError:
@@ -411,7 +430,11 @@ class AtomPersister:
             experiment = self._get_experiment(entry, user)
             if not experiment: # Experiment not found and can't be created.
                 return None
-            dataset = experiment.dataset_set.create(description=dataset_description)
+
+
+            dataset = Dataset(experiment=experiment,description=dataset_description)
+
+
             logging.getLogger(__name__).info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
                     experiment.id, experiment.title))
             dataset.save()
