@@ -490,7 +490,7 @@ class AtomWalker:
             entries.extend(map(lambda entry: (doc.feed, entry), new_entries))
             next_href = self._get_next_href(doc)
             # Stop if the filter found an existing entry or no next
-            if len(new_entries) != len(doc.entries) or next_href == None:
+            if (0 and len(new_entries) != len(doc.entries)) or next_href == None:
                 break
             doc = self.fetch_feed(next_href)
         logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), totalentries))
