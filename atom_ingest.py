@@ -10,24 +10,22 @@ import urllib2
 import datetime
 import logging
 from celery.contrib import rdb
-<<<<<<< HEAD
 from options import IngestOptions
-=======
 from tardis.tardis_portal.models import Dataset_File
 from django.utils.importlib import import_module
->>>>>>> 5d191d0ed323d720c930b75fa8c5efa5f0e7e5b2
 
 class AtomImportSchemas:
-    modules = settings.FILTER_MIDDLEWARE
-    for filter_module, filter_class in modules:
-        try:
-            # import filter middleware
-            filter_middleware = import_module(filter_module)
-            filter_init = getattr(filter_middleware, filter_class)
-            # initialise filter
-            filter_init()
-        except ImportError, e:
-            logging.getLogger(__name__).error('Error importing filter %s: "%s"' % (module, e) )
+    if IngestOptions.USE_MIDDLEWARE_FILTERS:
+        modules = settings.FILTER_MIDDLEWARE
+        for filter_module, filter_class in modules:
+            try:
+                # import filter middleware
+                filter_middleware = import_module(filter_module)
+                filter_init = getattr(filter_middleware, filter_class)
+                # initialise filter
+                filter_init()
+            except ImportError, e:
+                logging.getLogger(__name__).error('Error importing filter %s: "%s"' % (module, e) )
 
 
     BASE_NAMESPACE = 'http://mytardis.org/schemas/atom-import'
@@ -58,34 +56,6 @@ class AtomImportSchemas:
 
 class AtomPersister:
 
-<<<<<<< HEAD
-=======
-    # Names of parameters, must match fixture entries.
-    # Some are also used for <category> processing in the feed itself.
-    PARAM_ENTRY_ID = 'EntryID'
-    PARAM_EXPERIMENT_ID = 'ExperimentID'
-    PARAM_UPDATED = 'Updated'
-    PARAM_EXPERIMENT_TITLE = 'ExperimentTitle'
-    
-    ALLOW_EXPERIMENT_CREATION = True        # Should we create new experiments
-    ALLOW_EXPERIMENT_TITLE_MATCHING = True   # If there's no id, is the title enough to match on
-    ALLOW_UNIDENTIFIED_EXPERIMENT = True     # If there's no title/id, should we process it as "uncategorized"?
-    DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE="Uncategorized Data"
-    ALLOW_UNNAMED_DATASETS = True            # If a dataset has no title, should we ingest it with a default name
-    DEFAULT_UNNAMED_DATASET_TITLE = '(assorted files)'
-    ALLOW_USER_CREATION = False               # If experiments belong to unknown users, create them?
-    # Can existing datasets be updated? If not, we ignore updates. To cause a new dataset to be created, the incoming
-    # feed must have a unique EntryID for the dataset (eg, hash of its contents).
-    ALLOW_UPDATING_DATASETS = True
-    # If a datafile is modified, do we re-harvest it (creating two copies)? Else, we ignore the update. False is not recommended.
-    ALLOW_UPDATING_DATAFILES = True                     
-    
-    # If files are served as /user/instrument/experiment/dataset/datafile/moredatafiles
-    # then 'datafile' is at depth 5. This is so we can maintain directory structure that
-    # is significant within a dataset. Set to -1 to assume the last directory
-    DATAFILE_DIRECTORY_DEPTH = 7 # /mnt/rmmf_staging/e123/NovaNanoSEM/exp2/ds2/test4.tif
-
->>>>>>> 5d191d0ed323d720c930b75fa8c5efa5f0e7e5b2
     def is_new(self, feed, entry):
         '''
         :param feed: Feed context for entry
@@ -127,10 +97,14 @@ class AtomPersister:
                     name__name=IngestOptions.PARAM_UPDATED)
 
             # Database times are naive-local, so we make them aware-local
-            if p.datetime_value == None:
-                logging.getLogger(__name__).warn("Weird. Dataset {0} has an UPDATED parameter with no datetime_value.".format(dataset))
-                return None
-            local = get_local_time(p.datetime_value)
+            timestamp = p.datetime_value
+            if timestamp == None:
+                try:
+                    timestamp = iso8601.parse_date(p.string_value)
+                except:
+                    logger.exception("Bad timestamp in Dataset {0}'s UPDATED parameter.".format(dataset))
+                    return None
+            local = get_local_time(timestamp)
             return local
         except DatasetParameter.DoesNotExist:
             return None
@@ -268,8 +242,9 @@ class AtomPersister:
                     return
                 logging.getLogger(__name__).info("Ingesting updated datafile. File to ingest '{0}' is {1} newer than stored file. This will create an additional copy.".
                                                  format(enclosure.href, self.human_time(timediff)))
-                # Mark all older versions of file as hidden. (!)
-                Dataset_Hidden.objects.filter(datafile__dataset=dataset).update(hidden=True)
+                if IngestOptions.HIDE_REPLACED_DATAFILES:
+                    # Mark all older versions of file as hidden. (!)
+                    Dataset_Hidden.objects.filter(datafile__dataset=dataset).update(hidden=True)
                 #dataset.dataset_file_set.filter(filename=filename).update(
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
