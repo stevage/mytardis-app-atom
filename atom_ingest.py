@@ -13,6 +13,7 @@ from celery.contrib import rdb
 from options import IngestOptions
 from tardis.tardis_portal.models import Dataset_File
 from django.utils.importlib import import_module
+from tardis.tardis_portal.util import get_local_time, get_utc_time, get_local_time_naive
 
 class AtomImportSchemas:
     if IngestOptions.USE_MIDDLEWARE_FILTERS:
@@ -23,9 +24,11 @@ class AtomImportSchemas:
                 filter_middleware = import_module(filter_module)
                 filter_init = getattr(filter_middleware, filter_class)
                 # initialise filter
+                
+                logging.getLogger(__name__).info("Initialising middleware filter %s" % filter_module)
                 filter_init()
             except ImportError, e:
-                logging.getLogger(__name__).error('Error importing filter %s: "%s"' % (module, e) )
+                logging.getLogger(__name__).error('Error importing filter %s: "%s"' % (filter_module, e) )
 
 
     BASE_NAMESPACE = 'http://mytardis.org/schemas/atom-import'
@@ -88,7 +91,6 @@ class AtomPersister:
 
     def _get_dataset_updated(self, dataset):
         
-        from tardis.tardis_portal.util import get_local_time, get_utc_time
         import logging
         try:
             p = DatasetParameter.objects.get(
@@ -140,21 +142,20 @@ class AtomPersister:
             
             mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
             mgr.new_param(IngestOptions.PARAM_ENTRY_ID, entryId)
-            
         try:
             p = DatasetParameter.objects.get(parameterset__dataset=dataset, parameterset__schema=schema,
                                         name__name=IngestOptions.PARAM_UPDATED)
 
-            from tardis.tardis_portal.util import get_local_time, get_utc_time
             i=iso8601.parse_date(updated)
-            l=get_local_time(i)
-            u=get_utc_time(l) 
+            l=get_local_time_naive(i)
             p.datetime_value = l
-            #p.updated = updated;
             p.save()
         except DatasetParameter.DoesNotExist:            
             mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
-            mgr.new_param(IngestOptions.PARAM_UPDATED, iso8601.parse_date(updated))
+                       
+            t = get_local_time_naive(iso8601.parse_date(updated))
+            logging.getLogger(__name__).debug("Setting update parameter with datetime %s" % t)  
+            mgr.new_param(IngestOptions.PARAM_UPDATED, t)
 
     def _create_experiment_id_parameter_set(self, experiment, experimentId):
         '''
@@ -245,7 +246,6 @@ class AtomPersister:
                 if IngestOptions.HIDE_REPLACED_DATAFILES:
                     # Mark all older versions of file as hidden. (!)
                     Dataset_Hidden.objects.filter(datafile__dataset=dataset).update(hidden=True)
-                #dataset.dataset_file_set.filter(filename=filename).update(
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
 
@@ -416,9 +416,7 @@ class AtomPersister:
             if not experiment: # Experiment not found and can't be created.
                 return None
 
-
             dataset = Dataset(experiment=experiment,description=dataset_description)
-
 
             logging.getLogger(__name__).info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
                     experiment.id, experiment.title))
@@ -479,22 +477,31 @@ class AtomWalker:
         '''
         returns list of (feed, entry) tuples to be processed, filtering out old ones.
         '''
-        doc = self.fetch_feed(self.root_doc)
-        entries = []
-        totalentries = 0
-        while True:
-            if doc == None:
-                break
-            totalentries += len(doc.entries)
-            new_entries = filter(lambda entry: self.persister.is_new(doc.feed, entry), doc.entries)
-            entries.extend(map(lambda entry: (doc.feed, entry), new_entries))
-            next_href = self._get_next_href(doc)
-            # Stop if the filter found an existing entry or no next
-            if (0 and len(new_entries) != len(doc.entries)) or next_href == None:
-                break
-            doc = self.fetch_feed(next_href)
-        logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), totalentries))
-        return reversed(entries)
+        try: 
+            import socket
+            socket.setdefaulttimeout(30.0)
+            doc = self.fetch_feed(self.root_doc)
+            entries = []
+            totalentries = 0
+            if len(doc.entries) == 0:
+                logging.getLogger(__name__).warn("Received feed with no entries.") 
+            #logging.getLogger(__name__).debug(doc)
+            while True:
+                if doc == None:
+                    break
+                totalentries += len(doc.entries)
+                new_entries = filter(lambda entry: self.persister.is_new(doc.feed, entry), doc.entries)
+                entries.extend(map(lambda entry: (doc.feed, entry), new_entries))
+                next_href = self._get_next_href(doc)
+                # Stop if the filter found an existing entry or no next
+                if (0 and len(new_entries) != len(doc.entries)) or next_href == None:
+                    break
+                doc = self.fetch_feed(next_href)
+            logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), totalentries))
+            return reversed(entries)       
+        except: 
+            logging.getLogger(__name__).exception("get_entries")
+            return []
 
     def ingest(self): 
         '''
@@ -506,5 +513,11 @@ class AtomWalker:
 
     def fetch_feed(self, url):
         '''Retrieves the current contents of our feed.'''
-        return feedparser.parse(url, handlers=[self.get_credential_handler()])
+        logging.getLogger(__name__).debug("Fetching feed: %s" % url)
+        import urllib2
+        handlers = [self.get_credential_handler()]
+        if IngestOptions.HTTP_PROXY:
+            handlers.append (urllib2.ProxyHandler( {"http":IngestOptions.HTTP_PROXY}))
+        return feedparser.parse(url, handlers=handlers)
 
+    

@@ -24,3 +24,13 @@ class IngestOptions:
     # then 'datafile' is at depth 5. This is so we can maintain directory structure that
     # is significant within a dataset. Set to -1 to assume the deepest directory.
     DATAFILE_DIRECTORY_DEPTH = 6 # /mnt/rmmf_staging/e123/NovaNanoSEM/exp1/ds1/test3.tif
+    USE_MIDDLEWARE_FILTERS = False # Initialise metadata extraction filters? Requires settings.py config.
+    HIDE_REPLACED_DATAFILES = True # Mark old versions of updated datafiles as hidden. Requires datafile hiding feature in Tardis. 
+    
+    # If we can transfer files "locally" (ie, via SMB mount), then replace URL_BASE_TO_REPLACE with LOCAL_SOURCE_PATH
+    # to construct a file path that can be copied from. 
+    USE_LOCAL_TRANSFERS = True
+    URL_BASE_TO_REPLACE = "http://datapuller.isis.rmit.edu.au/"
+    LOCAL_SOURCE_PATH = "/mnt/rmmf_staging/"
+    
+    HTTP_PROXY = "http://bproxy.rmit.edu.au:8080"
