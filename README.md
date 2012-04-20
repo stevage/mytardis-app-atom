@@ -46,7 +46,7 @@ In a production environment, you should combine HTTP Basic password protection w
 
 Settings
 -------------
-Various policy settings are defined at the top of atom_ingest.py:
+Various policy settings are defined in options.py
 
     ALLOW_EXPERIMENT_CREATION = True         # Should we create new experiments
     ALLOW_EXPERIMENT_TITLE_MATCHING = True   # If there's no id, is the title enough to match on
@@ -66,6 +66,16 @@ Various policy settings are defined at the top of atom_ingest.py:
     # is significant within a dataset. Set to -1 to assume the deepest directory.
     DATAFILE_DIRECTORY_DEPTH = 5
 
+    USE_MIDDLEWARE_FILTERS = False # Initialise metadata extraction filters? Requires settings.py config.
+    HIDE_REPLACED_DATAFILES = True # Mark old versions of updated datafiles as hidden. Requires datafile hiding feature in Tardis. 
+    
+    # If we can transfer files "locally" (ie, via SMB mount), then replace URL_BASE_TO_REPLACE with LOCAL_SOURCE_PATH
+    # to construct a file path that can be copied from. 
+    USE_LOCAL_TRANSFERS = True
+    URL_BASE_TO_REPLACE = "http://dataprovider.example.com/files/"
+    LOCAL_SOURCE_PATH = "/mnt/dataprovider/"
+    
+    HTTP_PROXY = "http://proxy.example.com:8080" # Leave blank for no proxy
 
 [celerybeat]: http://ask.github.com/celery/userguide/periodic-tasks.html#starting-celerybeat
 [celeryd]: http://ask.github.com/celery/userguide/workers.html#starting-the-workers
