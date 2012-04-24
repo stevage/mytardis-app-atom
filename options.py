@@ -33,4 +33,7 @@ class IngestOptions:
     URL_BASE_TO_REPLACE = "http://datapuller.isis.rmit.edu.au/"
     LOCAL_SOURCE_PATH = "/mnt/rmmf_staging/"
     
+    # Should we always examine every dataset entry in the feed, even after encountering "old" entries?
+    ALWAYS_PROCESS_FULL_FEED = False
+    
     HTTP_PROXY = "http://bproxy.rmit.edu.au:8080"

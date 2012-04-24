@@ -8,11 +8,11 @@ import logging
 from .options import IngestOptions
 
 @task(name="atom_ingest.walk_feed", ignore_result=True)
-def walk_feed(feed):
+def walk_feed(feed, full_harvest=IngestOptions.ALWAYS_PROCESS_FULL_FEED):
     try:
-        AtomWalker(feed).ingest()
+        AtomWalker(feed).ingest(full_harvest)
     except DatabaseError, exc:
-        walk_feed.retry(args=[feed], exc=exc)
+        walk_feed.retry(args=[feed, full_harvest], exc=exc)
 
 
 @task(name="atom_ingest.walk_feeds", ignore_result=True)

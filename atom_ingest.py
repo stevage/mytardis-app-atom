@@ -473,19 +473,20 @@ class AtomWalker:
             return None
 
 
-    def get_entries(self):
+    def get_entries(self, full_harvest):
         '''
+        full_harvest: if false, stop looking once we encounter a dataset we've previously ingested.
+        This assumption means that new (unseen before) old (created a long time ago) datasets can be missed,
+        if procedures allow old datasets to come online for some reason. An occasional full_harvest=True will
+        catch these.
         returns list of (feed, entry) tuples to be processed, filtering out old ones.
         '''
         try: 
-            import socket
-            socket.setdefaulttimeout(30.0)
             doc = self.fetch_feed(self.root_doc)
             entries = []
             totalentries = 0
             if len(doc.entries) == 0:
                 logging.getLogger(__name__).warn("Received feed with no entries.") 
-            #logging.getLogger(__name__).debug(doc)
             while True:
                 if doc == None:
                     break
@@ -493,8 +494,8 @@ class AtomWalker:
                 new_entries = filter(lambda entry: self.persister.is_new(doc.feed, entry), doc.entries)
                 entries.extend(map(lambda entry: (doc.feed, entry), new_entries))
                 next_href = self._get_next_href(doc)
-                # Stop if the filter found an existing entry or no next
-                if (0 and len(new_entries) != len(doc.entries)) or next_href == None:
+                # Stop if the filter found an existing entry (and we're not doing a full harvest) or no next
+                if (not full_harvest and len(new_entries) != len(doc.entries)) or next_href == None:
                     break
                 doc = self.fetch_feed(next_href)
             logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), totalentries))
@@ -503,11 +504,13 @@ class AtomWalker:
             logging.getLogger(__name__).exception("get_entries")
             return []
 
-    def ingest(self): 
+    def ingest(self, full_harvest = False): 
         '''
         Processes each of the entries in our feed.
         '''
-        for feed, entry in self.get_entries():
+        if full_harvest:
+            logging.getLogger(__name__).info("Starting *full* harvest.")
+        for feed, entry in self.get_entries(full_harvest):
             self.persister.process(feed, entry)
 
 
