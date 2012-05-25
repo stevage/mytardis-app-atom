@@ -245,6 +245,7 @@ class AtomPersister:
                                                  format(enclosure.href, self.human_time(timediff)))
                 if IngestOptions.HIDE_REPLACED_DATAFILES:
                     # Mark all older versions of file as hidden. (!)
+                    from tardis.microtardis.models import Dataset_Hidden  
                     Dataset_Hidden.objects.filter(datafile__dataset=dataset).update(hidden=True)
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))

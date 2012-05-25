@@ -29,6 +29,7 @@ class IngestOptions:
     
     # If we can transfer files "locally" (ie, via SMB mount), then replace URL_BASE_TO_REPLACE with LOCAL_SOURCE_PATH
     # to construct a file path that can be copied from. 
+    # These paths must include a trailing slash (/)
     USE_LOCAL_TRANSFERS = True
     URL_BASE_TO_REPLACE = "http://datapuller.isis.rmit.edu.au/"
     LOCAL_SOURCE_PATH = "/mnt/rmmf_staging/"
