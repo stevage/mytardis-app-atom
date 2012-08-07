@@ -16,7 +16,7 @@ from celery.contrib import rdb
 from options import IngestOptions
 from tardis.tardis_portal.models import Dataset_File
 from django.utils.importlib import import_module
-from tardis.tardis_portal.util import get_local_time, get_utc_time, get_local_time_naive
+from time_util import get_local_time, get_utc_time, get_local_time_naive
 
 # Ensure filters are loaded
 try:
@@ -433,7 +433,7 @@ class AtomPersister:
                     return None
                     dataset = experiment.datasets.create(description=dataset_description)
                 logger.info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
-                        experiment.id, experiment.title)
+                        experiment.id, experiment.title))
                 dataset.save()
 
                 # Not allowing updating is sort of like immutability, right?
