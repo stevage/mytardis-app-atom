@@ -22,8 +22,10 @@ def walk_feeds(*feeds):
     for feed in feeds:
         walk_feed.delay(feed)
 
-
 '''
+# This function is now in MyTardis core - but not including the 'local copy' mode. What to do?
+
+
 @task(name="atom_ingest.make_local_copy", ignore_result=True)
 def make_local_copy(datafile):
     import urllib, os, pwd

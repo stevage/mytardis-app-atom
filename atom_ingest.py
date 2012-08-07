@@ -200,7 +200,7 @@ class AtomPersister:
                         entry.author_detail.name, getattr(entry.author_detail, "email", "no email")))
                 return None
         
-        user = User(username=entry.author_detail.name)
+        user = User(username=username_)
         user.save()
         UserProfile(user=user).save()
         return user
@@ -223,7 +223,6 @@ class AtomPersister:
         '''
         
         filename = getattr(enclosure, 'title', basename(enclosure.href))
-
         # check if we were provided a full path, and hence a subdirectory for the file 
         if (IngestOptions.DATAFILE_DIRECTORY_DEPTH >= 1 and
                     getattr(enclosure, "path", "") != "" and
@@ -274,22 +273,17 @@ class AtomPersister:
                                 filename=filename,
                                 created_time=fromunix1000(enclosure.created),
                                 modification_time=fromunix1000(enclosure.modified))
-        
         datafile.protocol = enclosure.href.partition('://')[0]
-
-
+        
         try:
             datafile.mimetype = enclosure.mime
         except AttributeError:
             pass
+
         try:
             datafile.size = enclosure.length
         except AttributeError:
-            return
-
-        datafile = Dataset_File(dataset=dataset,
-                                url=media_content['url'], 
-                                filename=filename)
+            pass
 
         try:
             hash = enclosure.hash
@@ -302,6 +296,7 @@ class AtomPersister:
         datafile.save()
         self.make_local_copy(datafile)
 
+# process_media_content() used to be here?
 
     def make_local_copy(self, datafile):
         ''' Actually retrieve datafile. '''
@@ -345,13 +340,13 @@ class AtomPersister:
             pass
         if (IngestOptions.ALLOW_UNIDENTIFIED_EXPERIMENT):
             return (user.username+"-default", 
-                    IngestOptions.DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE,
+                    IngestOptions.DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE, 
                     Experiment.PUBLIC_ACCESS_NONE)
 
         else:
             logging.getLogger(__name__).info("Skipping dataset. ALLOW_UNIDENTIFIED_EXPERIMENT disabled, so not harvesting unidentified experiment for user {0}.".format(
                         user.username))
-            return (None, None)
+            return (None, None, Experiment.PUBLIC_ACCESS_NONE)
 
     def _get_experiment(self, entry, user):
         '''
@@ -359,9 +354,7 @@ class AtomPersister:
         If it doesn't exist, a new Experiment is created and given
         an appropriate ACL for the user.
         '''
-        experimentId, title, public_access = \
-            self._get_experiment_details(entry, user)
-
+        experimentId, title, public_access = self._get_experiment_details(entry, user)
         if (experimentId, title) == (None, None):
             return None
         
@@ -416,18 +409,15 @@ class AtomPersister:
         saving it to an appropriate Experiment if it's new.
         :returns Saved dataset
         '''
-        #import pydevd; pydevd.settrace()
         user = self._get_user_from_entry(entry)
         if not user:
-            return None # No target user means no ingest. Warn?
+            return None # No target user means no ingest.
         dataset_description=entry.title
         if not dataset_description:
             if not IngestOptions.ALLOW_UNNAMED_DATASETS:
                 logging.getLogger(__name__).info("Skipping dataset. ALLOW_UNNAMED_DATASETS disabled, so ignoring unnamed dataset ({0}) for user {1}".format(entry.id, user))
                 return
             dataset_description=IngestOptions.DEFAULT_UNNAMED_DATASET_TITLE
-        
-        # Create dataset if necessary
         with transaction.commit_on_success():
             # Get lock to prevent concurrent execution
             self._lock_on_schema()
@@ -437,19 +427,18 @@ class AtomPersister:
                 if not IngestOptions.ALLOW_UPDATING_DATASETS:
                     logging.getLogger(__name__).debug("Skipping dataset. ALLOW_UPDATING_DATASETS disabled, so ignore existing dataset {0}".format(dataset.id))
                     return dataset
-    
             except Dataset.DoesNotExist:
                 experiment = self._get_experiment(entry, user)
                 if not experiment: # Experiment not found and can't be created.
                     return None
-    
-                dataset = Dataset(experiment=experiment,description=dataset_description)
-    
-                logging.getLogger(__name__).info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
-                        experiment.id, experiment.title))
-                # Not updating datasets ~= immutability
+                    dataset = experiment.datasets.create(description=dataset_description)
+                logger.info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
+                        experiment.id, experiment.title)
+                dataset.save()
+
+                # Not allowing updating is sort of like immutability, right?
                 if not IngestOptions.ALLOW_UPDATING_DATASETS:
-                    dataset.immutable = True                
+                    dataset.immutable = True
                 dataset.save()
             
             # Set 'Updated' parameter for dataset, and collect the files.
@@ -464,7 +453,7 @@ class AtomPersister:
                     logging.getLogger(__name__).error("Enclosure: {0}".format(json.dumps(enclosure)))
             for media_content in getattr(entry, 'media_content', []):
                 self.process_media_content(dataset, media_content)
-        return dataset
+            return dataset
 
 
 
