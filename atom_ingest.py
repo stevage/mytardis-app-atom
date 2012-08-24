@@ -197,7 +197,7 @@ class AtomPersister:
         except User.DoesNotExist:
             if len(username_) < 1:
                 logger.warn("Skipping dataset. Dataset found with blank username.")
-                retun None
+                return None
             if not IngestOptions.ALLOW_USER_CREATION:
                 logging.getLogger(__name__).info("Skipping dataset. ALLOW_USER_CREATION disabled. Datasets found for user '{0}' ({1}) but user doesn't exist".format(
                         entry.author_detail.name, getattr(entry.author_detail, "email", "no email")))
