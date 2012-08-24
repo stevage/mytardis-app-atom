@@ -195,6 +195,9 @@ class AtomPersister:
         try:
             return User.objects.get(username=username_)
         except User.DoesNotExist:
+            if len(username_) < 1:
+                logger.warn("Skipping dataset. Dataset found with blank username.")
+                retun None
             if not IngestOptions.ALLOW_USER_CREATION:
                 logging.getLogger(__name__).info("Skipping dataset. ALLOW_USER_CREATION disabled. Datasets found for user '{0}' ({1}) but user doesn't exist".format(
                         entry.author_detail.name, getattr(entry.author_detail, "email", "no email")))
@@ -311,7 +314,7 @@ class AtomPersister:
         Failing that, makes up an experiment ID/title.
         :param entry Dataset entry to match.
         :param user Previously identified User
-        returns (experimentId, title) 
+        returns (experimentId, title, publicAccess) 
         '''
         try:
             # Standard category handling
@@ -331,7 +334,7 @@ class AtomPersister:
             # If a title is enough to match on, proceed...
             if (IngestOptions.ALLOW_EXPERIMENT_TITLE_MATCHING):
                 if (experimentId != None or title != None):
-                    return (experimentId, title)
+                    return (experimentId, title, Experiment.PUBLIC_ACCESS_NONE)
             # Otherwise require both Id and title
             if (experimentId != None and title != None):
                 return (experimentId, title, Experiment.PUBLIC_ACCESS_NONE)
@@ -431,7 +434,7 @@ class AtomPersister:
                 experiment = self._get_experiment(entry, user)
                 if not experiment: # Experiment not found and can't be created.
                     return None
-                    dataset = experiment.datasets.create(description=dataset_description)
+                dataset = experiment.datasets.create(description=dataset_description)
                 logger.info("Created dataset {0} '{1}' (#{2}) in experiment {3} '{4}'".format(dataset.id, dataset.description, entry.id,
                         experiment.id, experiment.title))
                 dataset.save()
@@ -521,9 +524,9 @@ class AtomWalker:
 
     def fetch_feed(self, url):
         '''Retrieves the current contents of our feed.'''
-        logging.getLogger(__name__).debug("Fetching feed: %s" % url)
+        logger.debug("Fetching feed: %s" % url)
         import urllib2
-        handlers = [self.get_credential_handler()]
-        if IngestOptions.HTTP_PROXY:
+        handlers = [get_credential_handler()]
+        if getattr(IngestOptions, 'HTTP_PROXY', ''):
             handlers.append (urllib2.ProxyHandler( {"http":IngestOptions.HTTP_PROXY}))
         return feedparser.parse(url, handlers=handlers)
