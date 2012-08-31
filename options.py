@@ -23,7 +23,7 @@ class IngestOptions:
     # If files are served as /user/instrument/experiment/dataset/datafile/moredatafiles
     # then 'datafile' is at depth 5. This is so we can maintain directory structure that
     # is significant within a dataset. Set to -1 to assume the deepest directory.
-    DATAFILE_DIRECTORY_DEPTH = 4 # /mnt/data/exp1/ds1/test3.tif
+    DATAFILE_DIRECTORY_DEPTH = 5 # /mnt/data/exp1/ds1/test3.tif
     USE_MIDDLEWARE_FILTERS = False # Initialise metadata extraction filters? Requires settings.py config.
     HIDE_REPLACED_DATAFILES = False # Mark old versions of updated datafiles as hidden. Requires datafile hiding feature in MicroTardis. 
     
