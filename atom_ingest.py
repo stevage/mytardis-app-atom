@@ -228,15 +228,20 @@ class AtomPersister:
         # deciding whether to process the enclosure than it does about actually processing it. That decision, or the influencing factors, should be refactored into separate methods.
         # Python has built-in time deltas and Django has time formatting functions, both of which would clean this code up considerably.
         
+        def _get_enclosure_url(enclosure):
+            ''' Optionally manipulate datafile URL, eg: http://foo.edu/bar.txt -> file:////fooserver/bar.txt'''
+            if IngestOptions.USE_LOCAL_TRANSFERS:
+                return enclosure.href.replace(IngestOptions.URL_BASE_TO_REPLACE, IngestOptions.LOCAL_SOURCE_PATH)
+            else:
+                return enclosure.href
+
         filename = getattr(enclosure, 'title', basename(enclosure.href))
         # check if we were provided a full path, and hence a subdirectory for the file 
         if (IngestOptions.DATAFILE_DIRECTORY_DEPTH >= 1 and
                     getattr(enclosure, "path", "") != "" and
                     enclosure.path.split("/")[IngestOptions.DATAFILE_DIRECTORY_DEPTH:] != ""):
             filename = "/".join(enclosure.path.split("/")[IngestOptions.DATAFILE_DIRECTORY_DEPTH:])
-        
-        #filename = getattr(enclosure, 'title', basename(enclosure.href))
-        
+                
         datafiles = dataset.dataset_file_set.filter(filename=filename)
         def fromunix1000 (tstr):
             return datetime.datetime.utcfromtimestamp(float(tstr)/1000)
@@ -280,7 +285,7 @@ class AtomPersister:
 
         # Create a record and start transferring.
         datafile = Dataset_File(dataset=dataset,
-                                url=enclosure.href, 
+                                url=_get_enclosure_url(enclosure), 
                                 filename=filename,
                                 created_time=fromunix1000(enclosure.created),
                                 modification_time=fromunix1000(enclosure.modified))
@@ -298,13 +303,6 @@ class AtomPersister:
         except AttributeError:
             pass
         datafile.save()
-        self.make_local_copy(datafile)
-
-    def make_local_copy(self, datafile):
-        ''' Actually retrieve datafile. '''
-        from tardis.tardis_portal.tasks import make_local_copy
-        make_local_copy.delay(datafile.id)
-
 
     def _get_experiment_details(self, entry, user):
         ''' 
@@ -458,7 +456,7 @@ class AtomPersister:
 
 
 class AtomWalker:
-    '''Logic for retrieving an Atom feed and iterating over it - but nothing about to do with the entries.'''
+    '''Logic for retrieving an Atom feed and iterating over it - but nothing about what to do with the entries.'''
 
     def __init__(self, root_doc, persister = AtomPersister()):
         self.root_doc = root_doc
@@ -467,7 +465,6 @@ class AtomWalker:
 
     @staticmethod
     def _get_next_href(doc):
-        #return None #####
         try:
             links = filter(lambda x: x.rel == 'next', doc.feed.links)
             if len(links) < 1:
