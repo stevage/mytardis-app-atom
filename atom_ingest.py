@@ -224,6 +224,9 @@ class AtomPersister:
         Examines one "enclosure" from an entry, representing a datafile.
         Determines whether to process it, and if so, starts the transfer.
         '''
+        # TODO tjdett: This method needs a clean-up, as it's doing many more things than was originally intended. It now contains more more code about 
+        # deciding whether to process the enclosure than it does about actually processing it. That decision, or the influencing factors, should be refactored into separate methods.
+        # Python has built-in time deltas and Django has time formatting functions, both of which would clean this code up considerably.
         
         filename = getattr(enclosure, 'title', basename(enclosure.href))
         # check if we were provided a full path, and hence a subdirectory for the file 
@@ -264,8 +267,13 @@ class AtomPersister:
                                                  format(enclosure.href, self.human_time(timediff)))
                 if IngestOptions.HIDE_REPLACED_DATAFILES:
                     # Mark all older versions of file as hidden. (!)
-                    from tardis.microtardis.models import Dataset_Hidden  
-                    Dataset_Hidden.objects.filter(datafile__dataset=dataset).update(hidden=True)
+                    try:
+                        from tardis.microtardis.models import Dataset_Hidden
+                        Dataset_Hidden.objects.filter(datafile__dataset=dataset).update(hidden=True)
+                    except ImportError:
+                        logger.warn("The MicroTardis app must be installed in order to use the HIDE_REPLACED_DATAFILES option. Existing version of datafile {0} " +
+                                    "will not be hidden.".format(datafile.filename))
+                  
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
 
@@ -278,15 +286,8 @@ class AtomPersister:
                                 modification_time=fromunix1000(enclosure.modified))
         datafile.protocol = enclosure.href.partition('://')[0]
         
-        try:
-            datafile.mimetype = enclosure.mime
-        except AttributeError:
-            pass
-
-        try:
-            datafile.size = enclosure.length
-        except AttributeError:
-            pass
+        datafile.mimetype = getattr(enclosure, "mime", datafile.mimetype)
+        datafile.size = getattr(enclosure, "length", datafile.size)
 
         try:
             hash = enclosure.hash
