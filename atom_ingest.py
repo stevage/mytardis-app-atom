@@ -300,8 +300,6 @@ class AtomPersister:
         datafile.save()
         self.make_local_copy(datafile)
 
-# process_media_content() used to be here?
-
     def make_local_copy(self, datafile):
         ''' Actually retrieve datafile. '''
         from tardis.tardis_portal.tasks import make_local_copy
@@ -455,8 +453,6 @@ class AtomPersister:
                     logging.getLogger(__name__).exception("Exception processing enclosure for {1} in dataset {0}:".format(
                             dataset, getattr(enclosure, 'href', "<no href!>")))
                     logging.getLogger(__name__).error("Enclosure: {0}".format(json.dumps(enclosure)))
-            for media_content in getattr(entry, 'media_content', []):
-                self.process_media_content(dataset, media_content)
             return dataset
 
 
