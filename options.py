@@ -28,11 +28,12 @@ class IngestOptions:
     HIDE_REPLACED_DATAFILES = False # Mark old versions of updated datafiles as hidden. Requires datafile hiding feature in MicroTardis. 
     
     # If we can transfer files "locally" (ie, via SMB mount), then replace URL_BASE_TO_REPLACE with LOCAL_SOURCE_PATH
-    # to construct a file path that can be copied from. 
+    # to construct a file path that can be copied from. With recent (late 2012+) MyTardis, LOCAL_SOURCE_PATH
+    # must start with file://. 
     # These paths must include a trailing slash (/)
     USE_LOCAL_TRANSFERS = False
     # URL_BASE_TO_REPLACE = "http://datapuller.isis.rmit.edu.au/"
-    # LOCAL_SOURCE_PATH = "/mnt/rmmf_staging/"
+    # LOCAL_SOURCE_PATH = "file:///mnt/rmmf_staging/"
     
     # Should we always examine every dataset entry in the feed, even after encountering "old" entries?
     ALWAYS_PROCESS_FULL_FEED = False
