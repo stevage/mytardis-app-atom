@@ -6,7 +6,7 @@ from tardis.tardis_portal.fetcher import get_credential_handler
 from tardis.tardis_portal.ParameterSetManager import ParameterSetManager
 from tardis.tardis_portal.models import Dataset, DatasetParameter, \
     Experiment, ExperimentACL, ExperimentParameter, ParameterName, Schema, \
-    Dataset_File, User, UserProfile
+    Dataset_File, User, UserProfile, Replica, Location
 from django.db import transaction
 from django.conf import settings
 import urllib2
@@ -22,6 +22,12 @@ from time_util import get_local_time, get_utc_time, get_local_time_naive
 try:
     from tardis.tardis_portal.filters import FilterInitMiddleware
     FilterInitMiddleware()
+except Exception:
+    pass
+# Ensure logging is configured
+try:
+    from tardis.tardis_portal.logging_middleware import LoggingMiddleware
+    LoggingMiddleware()
 except Exception:
     pass
 
@@ -71,6 +77,9 @@ class AtomImportSchemas:
 
 
 class AtomPersister:
+
+    def __init__(self, async_copy=True):
+        self.async_copy = async_copy;
 
     def is_new(self, feed, entry):
         '''
@@ -284,16 +293,21 @@ class AtomPersister:
 
 
         # Create a record and start transferring.
-        datafile = Dataset_File(dataset=dataset,
+        '''datafile = Dataset_File(dataset=dataset,
                                 url=_get_enclosure_url(enclosure), 
                                 filename=filename,
                                 created_time=fromunix1000(enclosure.created),
-                                modification_time=fromunix1000(enclosure.modified))
-        datafile.protocol = enclosure.href.partition('://')[0]
+                                modification_time=fromunix1000(enclosure.modified))'''
+        datafile = Dataset_File(
+            filename=filename, 
+            dataset=dataset,
+            created_time=fromunix1000(enclosure.created), # These were not included in latest version?
+            modification_time=fromunix1000(enclosure.modified))
+
+        ##datafile.protocol = enclosure.href.partition('://')[0]
         
         datafile.mimetype = getattr(enclosure, "mime", datafile.mimetype)
         datafile.size = getattr(enclosure, "length", datafile.size)
-
         try:
             hash = enclosure.hash
             # Split on white space, then ':' to get tuples to feed into dict
@@ -303,6 +317,29 @@ class AtomPersister:
         except AttributeError:
             pass
         datafile.save()
+        #url = enclosure.href
+        url =_get_enclosure_url(enclosure)
+        # This means we will allow the atom feed to feed us any enclosure
+        # URL that matches a registered location.  Maybe we should restrict
+        # this to a specific location.
+        location = Location.get_location_for_url(url)
+        if not location:
+            logger.error('Rejected ingestion for unknown location %s' % url)
+            return
+
+        replica = Replica(datafile=datafile, url=url,
+                          location=location)
+        replica.protocol = enclosure.href.partition('://')[0]
+        replica.save()
+        self.make_local_copy(replica)
+
+
+    def make_local_copy(self, replica):
+        from tardis.tardis_portal.tasks import make_local_copy
+        if self.async_copy:
+            make_local_copy.delay(replica.id)
+        else:
+            make_local_copy(replica.id)
 
     def _get_experiment_details(self, entry, user):
         ''' 
