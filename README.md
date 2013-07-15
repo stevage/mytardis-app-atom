@@ -44,6 +44,19 @@ HTTP Basic password protection is available via `settings.py` in MyTardis:
 
 In a production environment, you should combine HTTP Basic password protection with SSL for security.
 
+Location
+--------
+A "location" object in Django needs to be registered for each place you're going to harvest from. Currently
+it's a bit messy to do this - but hopefully we'll fix that. 
+
+1. In the Admin interface ("yourtardissite.com/admin"), click "Add" next to "Location". Enter:
+2. Name (will remain attached to ingested things as their source)
+3. URL: exactly as you entered it before, but with trailing slash.
+4. Type: external
+5. Priority: I don't know. 10?
+6. Is available: leave checked.
+7. Transfer provider: Either 'local' (for file:/// copies) or 'http'.
+
 Settings
 -------------
 Various policy settings are defined in options.py
