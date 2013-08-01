@@ -10,9 +10,14 @@ New metadata is ingested first, with data files being copied asynchronously afte
 Installation
 ------------
 
-Git clone the app into `tardis/apps`:
+Git clone the app into `mytardis/tardis/apps`:
 
-[tardis/apps] git clone https://github.com/stevage/mytardis-app-atom 
+[apps] git clone https://github.com/stevage/mytardis-app-atom 
+[apps] mv mytardis-app-atom atom
+
+Add it to the list of installed apps in `mytardis/settings.py`:
+
+    INSTALLED_APPS += ('mytardis.app.atom',)
 
 Configuration
 -------------
