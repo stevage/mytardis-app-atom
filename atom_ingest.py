@@ -508,7 +508,7 @@ class AtomWalker:
                 return None
             return links[0].href
         except AttributeError:
-            # May not have any links to filter
+            logging.getLogger(__name__).warn("No links element found in feed. Probably the whole feed is broken. Did you forget a trailing slash? %s" % doc)
             return None
 
 
