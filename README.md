@@ -31,7 +31,7 @@ for `settings.py` using the above dataset provider:
       "update-feeds": {
           "task": "atom_ingest.walk_feeds",
           "schedule": timedelta(seconds=60),
-          "args": ('http://localhost:4000',)
+          "args": ('http://localhost:4000/',) # Don't forget the trailing slash!
       },
     }.items())
 
