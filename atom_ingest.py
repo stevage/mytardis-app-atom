@@ -5,7 +5,7 @@ from tardis.tardis_portal.auth.localdb_auth import django_user
 from tardis.tardis_portal.fetcher import get_credential_handler
 from tardis.tardis_portal.ParameterSetManager import ParameterSetManager
 from tardis.tardis_portal.models import Dataset, DatasetParameter, \
-    Experiment, ExperimentACL, ExperimentParameter, ParameterName, Schema, \
+    Experiment, ObjectACL, ExperimentParameter, ParameterName, Schema, \
     Dataset_File, User, UserProfile, Replica, Location
 from django.db import transaction
 from django.conf import settings
@@ -43,7 +43,7 @@ class AtomImportSchemas:
                 filter_middleware = import_module(filter_module)
                 filter_init = getattr(filter_middleware, filter_class)
                 # initialise filter
-                
+
                 logging.getLogger(__name__).info("Initialising middleware filter %s" % filter_module)
                 filter_init()
             except ImportError, e:
@@ -112,12 +112,12 @@ class AtomPersister:
             return True
 
     def _get_dataset_updated(self, dataset):
-        
+
         import logging
         try:
             p = DatasetParameter.objects.get(
-                    parameterset__dataset=dataset, 
-                    parameterset__schema=AtomImportSchemas.get_schema(), 
+                    parameterset__dataset=dataset,
+                    parameterset__schema=AtomImportSchemas.get_schema(),
                     name__name=IngestOptions.PARAM_UPDATED)
 
             # Database times are naive-local, so we make them aware-local
@@ -132,7 +132,7 @@ class AtomPersister:
             return local
         except DatasetParameter.DoesNotExist:
             return None
-        
+
     def _get_dataset(self, feed, entry):
         '''
         If we have previously imported this entry as a dataset, return that dataset. Datasets
@@ -153,7 +153,7 @@ class AtomPersister:
     def _create_entry_parameter_set(self, dataset, entryId, updated):
         '''
         Creates or updates schema for dataset with populated 'EntryID' and 'Updated' fields
-        ''' 
+        '''
         schema = AtomImportSchemas.get_schema(Schema.DATASET)
         # I'm not sure why mgr.set_param always creates additional parametersets. Anyway
         # we can't use it. --SB.
@@ -161,7 +161,7 @@ class AtomPersister:
             p = DatasetParameter.objects.get(parameterset__dataset=dataset, parameterset__schema=schema,
                                         name__name=IngestOptions.PARAM_ENTRY_ID)
         except DatasetParameter.DoesNotExist:
-            
+
             mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
             mgr.new_param(IngestOptions.PARAM_ENTRY_ID, entryId)
         try:
@@ -172,11 +172,11 @@ class AtomPersister:
             l=get_local_time_naive(i)
             p.datetime_value = l
             p.save()
-        except DatasetParameter.DoesNotExist:            
+        except DatasetParameter.DoesNotExist:
             mgr = ParameterSetManager(parentObject=dataset, schema=schema.namespace)
-                       
+
             t = get_local_time_naive(iso8601.parse_date(updated))
-            logging.getLogger(__name__).debug("Setting update parameter with datetime %s" % t)  
+            logging.getLogger(__name__).debug("Setting update parameter with datetime %s" % t)
             mgr.new_param(IngestOptions.PARAM_UPDATED, t)
 
     def _create_experiment_id_parameter_set(self, experiment, experimentId):
@@ -211,7 +211,7 @@ class AtomPersister:
                 logging.getLogger(__name__).info("Skipping dataset. ALLOW_USER_CREATION disabled. Datasets found for user '{0}' ({1}) but user doesn't exist".format(
                         entry.author_detail.name, getattr(entry.author_detail, "email", "no email")))
                 return None
-        
+
         user = User(username=username_)
         user.save()
         UserProfile(user=user).save()
@@ -233,10 +233,10 @@ class AtomPersister:
         Examines one "enclosure" from an entry, representing a datafile.
         Determines whether to process it, and if so, starts the transfer.
         '''
-        # TODO tjdett: This method needs a clean-up, as it's doing many more things than was originally intended. It now contains more more code about 
+        # TODO tjdett: This method needs a clean-up, as it's doing many more things than was originally intended. It now contains more more code about
         # deciding whether to process the enclosure than it does about actually processing it. That decision, or the influencing factors, should be refactored into separate methods.
         # Python has built-in time deltas and Django has time formatting functions, both of which would clean this code up considerably.
-        
+
         def _get_enclosure_url(enclosure):
             ''' Optionally manipulate datafile URL, eg: http://foo.edu/bar.txt -> file:////fooserver/bar.txt'''
             if IngestOptions.USE_LOCAL_TRANSFERS:
@@ -245,23 +245,23 @@ class AtomPersister:
                 return enclosure.href
 
         filename = getattr(enclosure, 'title', basename(enclosure.href))
-        # check if we were provided a full path, and hence a subdirectory for the file 
+        # check if we were provided a full path, and hence a subdirectory for the file
         if (IngestOptions.DATAFILE_DIRECTORY_DEPTH >= 1 and
                     getattr(enclosure, "path", "") != "" and
                     enclosure.path.split("/")[IngestOptions.DATAFILE_DIRECTORY_DEPTH:] != ""):
             filename = "/".join(enclosure.path.split("/")[IngestOptions.DATAFILE_DIRECTORY_DEPTH:])
-                
+
         datafiles = dataset.dataset_file_set.filter(filename=filename)
         def fromunix1000 (tstr):
             return datetime.datetime.utcfromtimestamp(float(tstr)/1000)
         if datafiles.count() > 0:
             datafile = datafiles[0]
-            from django.db.models import Max                     
+            from django.db.models import Max
             newest=datafiles.aggregate(Max('modification_time'))['modification_time__max']
             if not newest:# datafile.modification_time:
                 ### rethink this!
                 return # We have this file, it has no time/date, let's skip it.
-            
+
             def total_seconds(td): # exists on datetime.timedelta in Python 2.7
                 return (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
             timediff = total_seconds(fromunix1000(enclosure.modified) - newest)
@@ -287,25 +287,25 @@ class AtomPersister:
                     except ImportError:
                         logger.warn("The MicroTardis app must be installed in order to use the HIDE_REPLACED_DATAFILES option. Existing version of datafile {0} " +
                                     "will not be hidden.".format(datafile.filename))
-                  
+
         else: # no local copy already.
             logging.getLogger(__name__).info("Ingesting datafile: '{0}'".format(enclosure.href))
 
 
         # Create a record and start transferring.
         '''datafile = Dataset_File(dataset=dataset,
-                                url=_get_enclosure_url(enclosure), 
+                                url=_get_enclosure_url(enclosure),
                                 filename=filename,
                                 created_time=fromunix1000(enclosure.created),
                                 modification_time=fromunix1000(enclosure.modified))'''
         datafile = Dataset_File(
-            filename=filename, 
+            filename=filename,
             dataset=dataset,
             created_time=fromunix1000(enclosure.created), # These were not included in latest version?
             modification_time=fromunix1000(enclosure.modified))
 
         ##datafile.protocol = enclosure.href.partition('://')[0]
-        
+
         datafile.mimetype = getattr(enclosure, "mime", datafile.mimetype)
         datafile.size = getattr(enclosure, "length", datafile.size)
         try:
@@ -342,13 +342,13 @@ class AtomPersister:
             make_local_copy(replica.id)
 
     def _get_experiment_details(self, entry, user):
-        ''' 
+        '''
         Looks for clues in the entry to help identify what Experiment the dataset should
         be stored under. Looks for tags like "...ExperimentID", "...ExperimentTitle".
         Failing that, makes up an experiment ID/title.
         :param entry Dataset entry to match.
         :param user Previously identified User
-        returns (experimentId, title, publicAccess) 
+        returns (experimentId, title, publicAccess)
         '''
         try:
             # Standard category handling
@@ -360,7 +360,7 @@ class AtomPersister:
                     experimentId = tag.term
                 if tag.scheme.endswith(IngestOptions.PARAM_EXPERIMENT_TITLE):
                     title = tag.term
-            
+
             if title == "":
                 title = None
             if experimentId == "":
@@ -372,12 +372,12 @@ class AtomPersister:
             # Otherwise require both Id and title
             if (experimentId != None and title != None):
                 return (experimentId, title, Experiment.PUBLIC_ACCESS_NONE)
-            
+
         except AttributeError:
             pass
         if (IngestOptions.ALLOW_UNIDENTIFIED_EXPERIMENT):
-            return (user.username+"-default", 
-                    IngestOptions.DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE, 
+            return (user.username+"-default",
+                    IngestOptions.DEFAULT_UNIDENTIFIED_EXPERIMENT_TITLE,
                     Experiment.PUBLIC_ACCESS_NONE)
 
         else:
@@ -394,7 +394,7 @@ class AtomPersister:
         experimentId, title, public_access = self._get_experiment_details(entry, user)
         if (experimentId, title) == (None, None):
             return None
-        
+
         if experimentId:
             try:
                 # Try and match ExperimentID if we have one.
@@ -406,7 +406,7 @@ class AtomPersister:
                 return parameter.parameterset.experiment
             except ExperimentParameter.DoesNotExist:
                 pass
-        
+
         # Failing that, match ExperimentTitle if possible
         if title:
             try:
@@ -424,15 +424,16 @@ class AtomPersister:
         experiment.save()
         self._create_experiment_id_parameter_set(experiment, experimentId)
         logging.getLogger(__name__).info("Created experiment {0} (title: {1}, user: {2}, experimentId: {3})".format(
-                        experiment.id, experiment.title, experiment.created_by, experimentId)) 
-        acl = ExperimentACL(experiment=experiment,
-                pluginId=django_user,
-                entityId=user.id,
-                canRead=True,
-                canWrite=True,
-                canDelete=True,
-                isOwner=True,
-                aclOwnershipType=ExperimentACL.OWNER_OWNED)
+                        experiment.id, experiment.title, experiment.created_by, experimentId))
+        acl = ObjectACL(content_type=experiment.get_ct(),
+                        object_id=experiment.id,
+                        pluginId=django_user,
+                        entityId=user.id,
+                        canRead=True,
+                        canWrite=True,
+                        canDelete=True,
+                        isOwner=True,
+                        aclOwnershipType=ObjectACL.OWNER_OWNED)
         acl.save()
         return experiment
 
@@ -442,7 +443,7 @@ class AtomPersister:
 
     def process(self, feed, entry):
         '''
-        Processes one entry from the feed, retrieving data, and 
+        Processes one entry from the feed, retrieving data, and
         saving it to an appropriate Experiment if it's new.
         :returns Saved dataset
         '''
@@ -477,7 +478,7 @@ class AtomPersister:
                 if not IngestOptions.ALLOW_UPDATING_DATASETS:
                     dataset.immutable = True
                 dataset.save()
-            
+
             # Set 'Updated' parameter for dataset, and collect the files.
             self._create_entry_parameter_set(dataset, entry.id, entry.updated)
             for enclosure in getattr(entry, 'enclosures', []):
@@ -520,12 +521,12 @@ class AtomWalker:
         catch these.
         returns list of (feed, entry) tuples to be processed, filtering out old ones.
         '''
-        try: 
+        try:
             doc = self.fetch_feed(self.root_doc)
             entries = []
             totalentries = 0
             if len(doc.entries) == 0:
-                logging.getLogger(__name__).warn("Received feed with no entries.") 
+                logging.getLogger(__name__).warn("Received feed with no entries.")
             while True:
                 if doc == None:
                     break
@@ -538,12 +539,12 @@ class AtomWalker:
                     break
                 doc = self.fetch_feed(next_href)
             logging.getLogger(__name__).info("Received feed. {0} new entries out of {1} to process.".format(len(entries), totalentries))
-            return reversed(entries)       
-        except: 
+            return reversed(entries)
+        except:
             logging.getLogger(__name__).exception("get_entries")
             return []
 
-    def ingest(self, full_harvest = False): 
+    def ingest(self, full_harvest = False):
         '''
         Processes each of the entries in our feed.
         '''
