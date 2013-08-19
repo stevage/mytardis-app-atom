@@ -6,7 +6,9 @@ from tardis.tardis_portal.fetcher import get_credential_handler
 from tardis.tardis_portal.ParameterSetManager import ParameterSetManager
 from tardis.tardis_portal.models import Dataset, DatasetParameter, \
     Experiment, ObjectACL, ExperimentParameter, ParameterName, Schema, \
-    Dataset_File, User, UserProfile, Replica, Location
+    Dataset_File, User, UserProfile, Replica, Location, Author_Experiment
+from tardis.tardis_portal.auth import AuthService
+from tardis.tardis_portal.tasks import email_user_task, verify_replica
 from django.db import transaction
 from django.conf import settings
 import urllib2
@@ -335,11 +337,10 @@ class AtomPersister:
 
 
     def make_local_copy(self, replica):
-        from tardis.tardis_portal.tasks import make_local_copy
         if self.async_copy:
-            make_local_copy.delay(replica.id)
+            verify_replica.delay(replica.id)
         else:
-            make_local_copy(replica.id)
+            verify_replica(replica.id)
 
     def _get_experiment_details(self, entry, user):
         '''
