@@ -17,7 +17,7 @@ Git clone the app into `mytardis/tardis/apps`:
 
 Add it to the list of installed apps in `mytardis/settings.py`:
 
-    INSTALLED_APPS += ('mytardis.app.atom',)
+    INSTALLED_APPS += ('mytardis.apps.atom',)
 
 Configuration
 -------------
@@ -36,8 +36,9 @@ for `settings.py` using the above dataset provider:
     }.items())
 
 
-You must run [celerybeat][celerybeat] and [celeryd][celeryd] for the scheduled updates to be performed.
-MyTardis provides a `Procfile` for this purpose, but you can run both adhoc with:
+
+[celerybeat][celerybeat] and [celeryd][celeryd] must be running for the scheduled updates to be performed. In
+a normal MyTardis environment, they'll already be running. If not:
 
     bin/django celeryd --beat
 
