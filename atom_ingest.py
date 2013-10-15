@@ -425,7 +425,7 @@ class AtomPersister:
         self._create_experiment_id_parameter_set(experiment, experimentId)
         logging.getLogger(__name__).info("Created experiment {0} (title: {1}, user: {2}, experimentId: {3})".format(
                         experiment.id, experiment.title, experiment.created_by, experimentId))
-        acl = ObjectACL(content_type=experiment.get_ct(),
+        acl = ObjectACL(content_object=experiment,
                         object_id=experiment.id,
                         pluginId=django_user,
                         entityId=user.id,
